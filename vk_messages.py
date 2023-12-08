@@ -1,9 +1,14 @@
-import urllib
-from concurrent.futures._base import CancelledError, TimeoutError
+import urllib.parse
+from concurrent.futures import CancelledError, TimeoutError
 
 from aiogram.utils.markdown import quote_html, hlink
 from aiovk.longpoll import LongPoll
-from aiogram.utils.exceptions import MessageError
+from aiovk import API
+import aiovk.exceptions as vk_exc
+from aiogram.types import ParseMode, MediaGroup, ChatActions
+import aiogram.utils.exceptions as tg_exc
+from aiogram.utils.parts import safe_split_text, MAX_MESSAGE_LENGTH
+from PIL import Image
 
 from bot import *
 
@@ -662,7 +667,7 @@ async def process_message(msg, token=None, is_multichat=None, vk_chat_id=None, u
                                                             parse_mode=ParseMode.HTML,
                                                             reply_to_message_id=main_message,
                                                             disable_notification=disable_notify)
-                    except MessageError:  # Надо бы обновить aiogram, чтобы можно было ловить MessageToReplyNotFound
+                    except tg_exc.MessageError:  # Надо бы обновить aiogram, чтобы можно было ловить MessageToReplyNotFound
                         tg_message = await bot.send_message(vkuser.owner.uid, body_parts[body_part],
                                                             parse_mode=ParseMode.HTML,
                                                             reply_to_message_id=None,
@@ -693,7 +698,7 @@ async def process_message(msg, token=None, is_multichat=None, vk_chat_id=None, u
                                                                          parse_mode=ParseMode.HTML,
                                                                          reply_to_message_id=main_message,
                                                                          disable_notification=disable_notify)
-                except MessageError:  # Надо бы обновить aiogram, чтобы можно было ловить MessageToReplyNotFound
+                except tg_exc.MessageError:  # Надо бы обновить aiogram, чтобы можно было ловить MessageToReplyNotFound
                     header_message = tg_message = await bot.send_message(to_tg_chat, header + body,
                                                                          parse_mode=ParseMode.HTML,
                                                                          reply_to_message_id=None,
@@ -860,7 +865,7 @@ async def tgsend(method, *args, **kwargs):
     try:
         tg_message = await method(*args, **kwargs)
         return tg_message
-    except RetryAfter as e:
+    except tg_exc.RetryAfter as e:
         await asyncio.sleep(e.timeout)
         await tgsend(method, *args, **kwargs)
     except Exception:
@@ -875,7 +880,7 @@ async def tgsend_error_report(chat_id, vk_msg_url):
         if vk_msg_url:
             text += '\n' + f'<a href="{vk_msg_url}">Сообщение</a>'
         await bot.send_message(chat_id, text=text, parse_mode='HTML')
-    except RetryAfter as e:
+    except tg_exc.RetryAfter as e:
         await asyncio.sleep(e.timeout)
         await tgsend_error_report(chat_id, vk_msg_url)
     except Exception:
@@ -1156,10 +1161,10 @@ async def vk_polling(vkuser: VkUser):
                     for update in data['updates']:
                         await process_longpoll_event(api, update)
             break
-        except VkLongPollError:
+        except vk_exc.VkLongPollError:
             log.error('Longpoll error! {}'.format(vkuser.pk))
             await asyncio.sleep(5)
-        except VkAuthError:
+        except vk_exc.VkAuthError:
             log.error('Auth Error! {}'.format(vkuser.pk))
             vkuser.is_polling = False
             vkuser.save()
@@ -1172,7 +1177,7 @@ async def vk_polling(vkuser: VkUser):
             break
         except aiohttp.client_exceptions.ServerDisconnectedError:
             log.warning('Longpoll server disconnected id: ' + str(vkuser.pk))
-        except VkAPIError:
+        except vk_exc.VkAPIError:
             # Invalid/Inaccessible token
             pass
         except Exception:

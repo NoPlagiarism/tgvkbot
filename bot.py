@@ -2,21 +2,17 @@ import io
 import logging
 import re
 import tempfile
+import traceback
 import ujson
 
 import aiohttp
 import django.conf
 import wget
-from PIL import Image
 from aiogram import Bot
 from aiogram.dispatcher import Dispatcher
-from aiogram.types import ParseMode, MediaGroup, InlineKeyboardMarkup, InlineKeyboardButton, ChatActions
-from aiogram.utils.exceptions import *
-from aiogram.utils.parts import safe_split_text, split_text, MAX_MESSAGE_LENGTH
 from aiogram.utils import context
-from aiovk import TokenSession, API
+from aiovk import TokenSession
 from aiovk.drivers import HttpDriver
-from aiovk.exceptions import *
 from aiovk.mixins import LimitRateDriverMixin
 
 from config import *
@@ -99,7 +95,6 @@ async def get_content(url, docname='tgvkbot.document', chrome_headers=True, rewr
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 dp.loop.set_task_factory(context.task_factory)
-import traceback
 
 
 @dp.errors_handler()

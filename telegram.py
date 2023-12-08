@@ -2,6 +2,11 @@ from aiogram import types
 from aiogram.bot.api import FILE_URL
 from aiogram.utils import executor, json
 from aiohttp.client_exceptions import ContentTypeError
+from aiogram.types import ParseMode, InlineKeyboardMarkup, InlineKeyboardButton, ChatActions
+from PIL import Image
+from aiovk import API
+import aiovk.exceptions as vk_exc
+import aiogram.utils.exceptions as tg_exc
 
 from bot import *
 from config import *
@@ -96,14 +101,14 @@ async def vk_sender(token, tg_message, **kwargs):
         except:
             log.exception(msg='Error in vk sender', exc_info=True)
             return None
-    except VkAuthError:
+    except vk_exc.VkAuthError:
         vk_user = VkUser.objects.filter(token=token).first()
         if vk_user:
             vk_user.delete()
         await bot.send_message(tg_message.chat.id, 'Вход не выполнен! /start для входа',
                                reply_to_message_id=tg_message.message_id)
         return
-    except VkAPIError:
+    except vk_exc.VkAPIError:
         await asyncio.sleep(5)
         if kwargs.get('retries', 0) > 4:
             log.exception(msg='Error in vk sender', exc_info=True)
@@ -165,7 +170,7 @@ async def upload_attachment(msg, vk_user, file_id, peer_id, attachment_type, upl
         if msg.content_type == 'audio':
             if not custom_ext and '.' in path and path.split('.')[-1] == 'mp3':
                 custom_ext = '.aac'
-    except NetworkError:
+    except tg_exc.NetworkError:
         await msg.reply('Файл слишком большой, максимально допустимый размер <b>20мб!</b>', parse_mode=ParseMode.HTML)
         return
 
@@ -395,7 +400,7 @@ async def ping_button(call: types.CallbackQuery):
         await bot.send_message(tg_chat_id, f'<a href="tg://user?id={call.from_user.id}">Ping!</a>',
                                parse_mode=ParseMode.HTML)
         await bot.answer_callback_query(call.id, 'Ping!')
-    except BadRequest:
+    except tg_exc.BadRequest:
         await bot.answer_callback_query(call.id, 'Нет доступа к чату, бот кикнут или чат удалён!', show_alert=True)
 
 
@@ -537,7 +542,7 @@ async def choose_chat(call: types.CallbackQuery):
             try:
                 await bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup,
                                             parse_mode=ParseMode.HTML)
-            except MessageNotModified:
+            except tg_exc.MessageNotModified:
                 pass
             await bot.answer_callback_query(call.id)
     else:
@@ -697,7 +702,7 @@ async def help_command(msg: types.Message):
                    '/search /s - Поиск по диалогам\n' \
                    '/chat - Список связанных чатов с диалогами ВКонтакте, привязать чат к диалогу можно добавив бота в группу\n' \
                    '/stop - Выход из ВКонтакте\n' \
-                   '/help - Помощь' \
+                   '/help - Помощь\n' \
                    '/id - Узнать Telegram ID'
 
     await bot.send_message(msg.chat.id, HELP_MESSAGE, parse_mode=ParseMode.HTML)
@@ -741,7 +746,7 @@ async def handle_text(msg: types.Message):
                             vkuserinfo['first_name'], vkuserinfo.get('last_name', '')), parse_mode='Markdown')
                     if refreshed_token:
                         await logged_in.reply('*Вам доступна музыка 🎵*', parse_mode='Markdown')
-                except VkAuthError:
+                except vk_exc.VkAuthError:
                     await msg.reply('Неверная ссылка, попробуйте ещё раз!')
             else:
                 await msg.reply('Вход уже выполнен!\n/stop для выхода.')
