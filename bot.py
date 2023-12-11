@@ -3,17 +3,19 @@ import logging
 import re
 import tempfile
 import traceback
+import urllib.parse
 import ujson
 
 import aiohttp
 import django.conf
-import wget
 from aiogram import Bot
 from aiogram.dispatcher import Dispatcher
 from aiogram.utils import context
 from aiovk import TokenSession
 from aiovk.drivers import HttpDriver
 from aiovk.mixins import LimitRateDriverMixin
+
+import typing as t
 
 from config import *
 
@@ -66,6 +68,41 @@ def get_max_photo(obj, keyword='photo'):
         return keyword + '_' + str(max(maxarr))
 
 
+def detect_filename(url: t.Optional[str] = None, out: t.Optional[str] = None, headers: t.Optional[dict] = None,
+                    default: t.Optional[str] = "download.wget") -> str:
+    """Function was taken from python package "wget" and improved
+    Return filename for saving file. If no filename is detected from output
+    argument, url or headers, return default (download.wget)
+    """
+    if out:
+        return out
+    if url:
+        fname = os.path.basename(urllib.parse.urlparse(url).path)
+        if fname.strip(" \n\t."):
+            return urllib.parse.unquote(fname)
+    if headers:
+        "https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Disposition"
+        if isinstance(headers, str):
+            headers = headers.splitlines()
+        if isinstance(headers, list):
+            headers = dict([x.split(":", maxsplit=1) for x in headers])
+        content_disposition = headers.get("Content-Disposition")
+        if not content_disposition:
+            return default
+        if "filename=\"" not in content_disposition:
+            return default
+        content_disposition = content_disposition.split(";")
+        try:
+            fname = tuple(filter(lambda x: x.strip().startswith("filename"), content_disposition))[0].split("=")[1].strip("\t")
+        except IndexError:
+            # Filename not found
+            return default
+        fname = str(os.path.basename(fname))
+        if fname:
+            return fname
+    return default
+
+
 async def get_content(url, docname='tgvkbot.document', chrome_headers=True, rewrite_name=False,
                       custom_ext=''):
     try:
@@ -77,12 +114,12 @@ async def get_content(url, docname='tgvkbot.document', chrome_headers=True, rewr
             if direct_url != url:
                 r.release()
                 c = await session.request('GET', direct_url)
-                file = wget.detect_filename(direct_url, headers=dict(c.headers), **filename_options)
+                file = detect_filename(direct_url, headers=dict(c.headers), **filename_options)
                 temppath = os.path.join(tempdir, file + custom_ext)
                 with open(temppath, 'wb') as f:
                     f.write(await c.read())
             else:
-                file = wget.detect_filename(direct_url, headers=dict(r.headers), **filename_options)
+                file = detect_filename(direct_url, headers=dict(r.headers), **filename_options)
                 temppath = os.path.join(tempdir, file + custom_ext)
                 with open(temppath, 'wb') as f:
                     f.write(await r.read())
