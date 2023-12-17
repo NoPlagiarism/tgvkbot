@@ -9,3 +9,4 @@ openssl_config
 venv/
 commands/
 .venv
+.env

@@ -1,5 +1,11 @@
 import os
 
+try:
+    import dotenv
+    dotenv.load_dotenv()
+except ImportError:
+    pass
+
 ALLOWED_USER_IDS = os.environ.get('ALLOWED_USER_IDS', '')
 
 DATABASE_USER = os.environ.get('POSTGRES_USER', 'postgres')

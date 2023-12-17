@@ -1,9 +1,9 @@
-FROM python:3.6-slim AS builder
+FROM python:3.9-slim AS builder
 RUN apt-get update && apt-get install -y gcc
 COPY requirements.txt .
 RUN pip install --user -r requirements.txt
 
-FROM python:3.6-slim
+FROM python:3.9-slim
 COPY --from=builder /root/.local /root/.local
 COPY . .
 ENV PATH=/root/.local/bin:$PATH
