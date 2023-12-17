@@ -1,16 +1,14 @@
-import io
 import logging
 import re
 import tempfile
-import traceback
 import urllib.parse
 import ujson
 
 import aiohttp
 import django.conf
-from aiogram import Bot
-from aiogram.dispatcher import Dispatcher
-from aiogram.utils import context
+from aiogram import Bot, Dispatcher
+from aiogram.types.error_event import ErrorEvent
+from aiogram.types.update import Update
 from aiovk import TokenSession
 from aiovk.drivers import HttpDriver
 from aiovk.mixins import LimitRateDriverMixin
@@ -106,7 +104,7 @@ def detect_filename(url: t.Optional[str] = None, out: t.Optional[str] = None, he
 async def get_content(url, docname='tgvkbot.document', chrome_headers=True, rewrite_name=False,
                       custom_ext=''):
     try:
-        with aiohttp.ClientSession(headers=CHROME_HEADERS if chrome_headers else {}) as session:
+        async with aiohttp.ClientSession(headers=CHROME_HEADERS if chrome_headers else {}) as session:
             r = await session.request('GET', url)
             direct_url = str(r.url)
             tempdir = tempfile.gettempdir()
@@ -130,12 +128,12 @@ async def get_content(url, docname='tgvkbot.document', chrome_headers=True, rewr
 
 
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(bot)
-dp.loop.set_task_factory(context.task_factory)
+dp = Dispatcher()
 
 
-@dp.errors_handler()
-async def all_errors_handler(dp, update, e):
+@dp.errors()
+async def all_errors_handler(error_event: ErrorEvent):
+    update: Update = error_event.update
     if 'message' in dir(update) and update.message:
         user = update.message.from_user.full_name
         user_id = update.message.from_user.id

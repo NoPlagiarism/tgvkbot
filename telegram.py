@@ -1,12 +1,15 @@
 from aiogram import types
-from aiogram.bot.api import FILE_URL
-from aiogram.utils import executor, json
 from aiohttp.client_exceptions import ContentTypeError
-from aiogram.types import ParseMode, InlineKeyboardMarkup, InlineKeyboardButton, ChatActions
+from aiogram.enums import ParseMode, ChatAction
+from aiogram.types import InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from PIL import Image
 from aiovk import API
 import aiovk.exceptions as vk_exc
-import aiogram.utils.exceptions as tg_exc
+import aiogram.exceptions as tg_exc
+import ujson as json
+import secrets
+
 
 from bot import *
 from config import *
@@ -21,11 +24,11 @@ oauth_link = re.compile(
 
 async def get_pages_switcher(markup, page, pages):
     if page != 0:
-        leftbutton = InlineKeyboardButton('◀', callback_data='page{}'.format(page - 1))  # callback
+        leftbutton = InlineKeyboardButton(text='◀', callback_data='page{}'.format(page - 1))  # callback
     else:
-        leftbutton = InlineKeyboardButton('Поиск 🔍', callback_data='search')
+        leftbutton = InlineKeyboardButton(text='Поиск 🔍', callback_data='search')
     if page + 1 < len(pages):
-        rightbutton = InlineKeyboardButton('▶', callback_data='page{}'.format(page + 1))
+        rightbutton = InlineKeyboardButton(text='▶', callback_data='page{}'.format(page + 1))
     else:
         rightbutton = None
 
@@ -78,9 +81,6 @@ async def is_bot_in_iterator(msg: types.Message):
     return False
 
 
-import secrets
-
-
 def generate_random_id():
     return secrets.randbelow(2_147_483_647)
 
@@ -98,7 +98,7 @@ async def vk_sender(token, tg_message, **kwargs):
             url, html = await session.driver.post_text(url=session.REQUEST_URL + 'messages.send', data=kwargs)
             response = json.loads(html)
             vk_msg_id = response['response']
-        except:
+        except Exception:
             log.exception(msg='Error in vk sender', exc_info=True)
             return None
     except vk_exc.VkAuthError:
@@ -115,7 +115,7 @@ async def vk_sender(token, tg_message, **kwargs):
             return None
         else:
             kwargs['retries'] = kwargs.get('retries', 0) + 1
-            await vk_sender(token, tg_message, **kwargs)
+            return await vk_sender(token, tg_message, **kwargs)
     except Exception:
         log.exception(msg='Error in vk sender', exc_info=True)
         return None
@@ -156,9 +156,11 @@ async def generate_send_options(msg, forward=None, forward_messages_exists=False
 
 
 async def send_vk_action(token, peer_id, action='typing'):
-    vksession = VkSession(access_token=token, driver=await get_driver(token))
+    # TODO: а это.. Ну... А нафиг оно вообще надо?
+    pass
+    """vksession = VkSession(access_token=token, driver=await get_driver(token))
     api = API(vksession)
-    return  # await api('messages.setActivity', peer_id=peer_id, activity=action)
+    return await api('messages.setActivity', peer_id=peer_id, activity=action)"""
 
 
 async def upload_attachment(msg, vk_user, file_id, peer_id, attachment_type, upload_field, upload_method,
@@ -170,11 +172,11 @@ async def upload_attachment(msg, vk_user, file_id, peer_id, attachment_type, upl
         if msg.content_type == 'audio':
             if not custom_ext and '.' in path and path.split('.')[-1] == 'mp3':
                 custom_ext = '.aac'
-    except tg_exc.NetworkError:
+    except tg_exc.TelegramNetworkError:
         await msg.reply('Файл слишком большой, максимально допустимый размер <b>20мб!</b>', parse_mode=ParseMode.HTML)
         return
 
-    url = FILE_URL.format(token=bot._BaseBot__token, path=path)
+    url = bot.session.api.file_url(token=bot.token, path=path)
     await send_vk_action(vk_user.token, peer_id)
     content = await get_content(url, default_name, chrome_headers=False, rewrite_name=rewrite_name,
                                 custom_ext=custom_ext)
@@ -193,7 +195,7 @@ async def upload_attachment(msg, vk_user, file_id, peer_id, attachment_type, upl
         if attachment_type == 'video':
             upload_options['is_private'] = 1
         upload_server = await api(upload_method, **upload_options)
-        with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession() as session:
             data = aiohttp.FormData()
             field_data = {}
             if filename:
@@ -273,7 +275,7 @@ async def get_dialogs(token, exclude=None):
                 output['title'] = g["name"]
 
     for button in range(len(order)):
-        order[button] = InlineKeyboardButton(order[button]['title'], callback_data=f'chat{order[button]["id"]}')
+        order[button] = InlineKeyboardButton(text=order[button]['title'], callback_data=f'chat{order[button]["id"]}')
 
     rows = [order[x:x + 2] for x in range(0, len(order), 2)]
     pages = [rows[x:x + 4] for x in range(0, len(rows), 4)]
@@ -287,7 +289,7 @@ async def search_dialogs(msg: types.Message, user=None):
     vkuser = VkUser.objects.filter(owner=user).first()
     vksession = VkSession(access_token=vkuser.token, driver=await get_driver(vkuser.token))
     api = API(vksession)
-    markup = InlineKeyboardMarkup(row_width=1)
+    markup_builder = InlineKeyboardBuilder()
     await bot.send_chat_action(msg.chat.id, 'typing')
     result = await api('messages.searchDialogs', q=msg.text, limit=10)
     for chat in result:
@@ -303,24 +305,20 @@ async def search_dialogs(msg: types.Message, user=None):
             title = await chat['name']
             data = f'chat{-chat["id"]}'
         if title and data:
-            markup.add(InlineKeyboardButton(text=title, callback_data=data))
-    markup.add(InlineKeyboardButton('Поиск 🔍', callback_data='search'))
-    if markup.inline_keyboard:
-        text = f'<b>Результат поиска по</b> <i>{msg.text}</i>'
-    else:
-        text = f'<b>Результат поиска по</b> <i>{msg.text}</i>'
-    await bot.send_message(msg.chat.id, text, reply_markup=markup, parse_mode=ParseMode.HTML)
+            markup_builder.add(InlineKeyboardButton(text=title, callback_data=data))
+    markup_builder.add(InlineKeyboardButton(text='Поиск 🔍', callback_data='search'))
+    text = f'<b>Результат поиска по</b> <i>{msg.text}</i>'
+    await bot.send_message(msg.chat.id, text, reply_markup=markup_builder.as_markup(), parse_mode=ParseMode.HTML)
 
 
 async def refresh_token(vkuser):
     try:
-        with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession() as session:
             r = await session.request('GET', TOKEN_REFRESH_URL, params={'token': vkuser.token})
             data = await r.json()
             if data['ok']:
                 vkuser.token = data['token']
                 vkuser.save()
-                session.close()
             else:
                 return False
         return True
@@ -350,11 +348,11 @@ async def page_switcher(call: types.CallbackQuery):
     ).first()
     if message_markup:
         pages = json.loads(message_markup.buttons)
-        markup = InlineKeyboardMarkup()
+        markup_builder = InlineKeyboardBuilder()
         for row in pages[page]:
-            markup.row(*[InlineKeyboardButton(**button) for button in row])
-        await get_pages_switcher(markup, page, pages)
-        await bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+            markup_builder.row(*[InlineKeyboardButton(**button) for button in row])
+        await get_pages_switcher(markup_builder.as_markup(), page, pages)
+        await bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup_builder.as_markup())
         await bot.answer_callback_query(call.id)
     else:
         await bot.answer_callback_query(call.id, 'Нет данных в Базе Данных', show_alert=True)
@@ -400,7 +398,7 @@ async def ping_button(call: types.CallbackQuery):
         await bot.send_message(tg_chat_id, f'<a href="tg://user?id={call.from_user.id}">Ping!</a>',
                                parse_mode=ParseMode.HTML)
         await bot.answer_callback_query(call.id, 'Ping!')
-    except tg_exc.BadRequest:
+    except tg_exc.TelegramBadRequest:
         await bot.answer_callback_query(call.id, 'Нет доступа к чату, бот кикнут или чат удалён!', show_alert=True)
 
 
@@ -412,7 +410,7 @@ async def delete_forward(call: types.CallbackQuery):
     if forward_in_db:
         forward_in_db.delete()
 
-    markup = InlineKeyboardMarkup()
+    markup = InlineKeyboardBuilder()
 
     message_markup = MessageMarkup.objects.filter(
         message_id=call.message.message_id,
@@ -430,7 +428,7 @@ async def delete_forward(call: types.CallbackQuery):
         if buttons:
             message_markup.buttons = json.dumps(buttons)
             message_markup.save()
-            await bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+            await bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup.as_markup())
         else:
             await bot.edit_message_text(
                 'У Вас нет связанных чатов. Чтобы привязать чат, добавьте бота в группу, а если бот уже добавлен - используйте команду /dialogs',
@@ -534,15 +532,16 @@ async def choose_chat(call: types.CallbackQuery):
                     vkchat=vkchat,
                     owner=user
                 )
-            markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton('Установить аватар и название', callback_data=f'setinfo{vkchat.cid}'))
+            markup_builder = InlineKeyboardBuilder()
+            markup_builder.add(InlineKeyboardButton(text='Установить аватар и название', callback_data=f'setinfo{vkchat.cid}'))
             text = 'Чат успешно привязан. Я могу автоматически изменить название и установить аватар, сделай бота администратором и убедись в наличии прав на редактирование информации группы'
             if call.message.chat.type == 'group':
                 text += '\n<b>Внимание!</b> Параметр <i>"All Members Are Administrators"</i> должен быть отключён и боту должна быть присвоена админка в отдельном порядке!'
             try:
-                await bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup,
+                await bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup_builder.as_markup(),
                                             parse_mode=ParseMode.HTML)
-            except tg_exc.MessageNotModified:
+            except tg_exc.TelegramBadRequest as e:
+                # TODO (?): Check especially if message is not modified
                 pass
             await bot.answer_callback_query(call.id)
     else:
@@ -566,7 +565,7 @@ async def search_callback(call: types.CallbackQuery):
 @dp.message_handler(commands=['start'])
 async def send_welcome(msg: types.Message):
     if ALLOWED_USER_IDS:
-        if str(msg.from_user.id) not in ALLOWED_USER_IDS.replace(' ','').split(','):
+        if str(msg.from_user.id) not in ALLOWED_USER_IDS.replace(' ', '').split(','):
             await msg.reply('⛔️ Бот недоступен для Вашего аккаунта.\nУзнать Telegram ID - /id')
             return
     user, created = await update_user_info(msg.from_user)
@@ -577,19 +576,19 @@ async def send_welcome(msg: types.Message):
             link = 'https://oauth.vk.com/authorize?client_id={}&' \
                    'display=page&redirect_uri=https://oauth.vk.com/blank.html&scope=friends,messages,offline,docs,photos,video,stories,audio' \
                    '&response_type=token&v={}'.format(VK_APP_ID, API_VERSION)
-            mark = InlineKeyboardMarkup()
-            login = InlineKeyboardButton('ВХОД', url=link)
-            mark.add(login)
+            markup_builder = InlineKeyboardBuilder()
+            login = InlineKeyboardButton(text='ВХОД', url=link)
+            markup_builder.add(login)
             await msg.reply('Привет, этот бот поможет тебе общаться ВКонтакте, войди по кнопке ниже'
                             ' и отправь мне то, что получишь в адресной строке.',
-                            reply_markup=mark)
+                            reply_markup=markup_builder.as_markup())
         else:
             await msg.reply('Вход уже выполнен!\n/stop для выхода.')
     else:
-        markup = InlineKeyboardMarkup()
+        markup_builder = InlineKeyboardBuilder()
         me = await bot.me
-        markup.add(InlineKeyboardButton('Перейти в бота', url=f'https://t.me/{me.username}?start=login'))
-        await msg.reply('Залогиниться можно только через личный чат с ботом', reply_markup=markup)
+        markup_builder.add(InlineKeyboardButton(text='Перейти в бота', url=f'https://t.me/{me.username}?start=login'))
+        await msg.reply('Залогиниться можно только через личный чат с ботом', reply_markup=markup_builder.as_markup())
 
 
 @dp.message_handler(commands=['stop'])
@@ -671,21 +670,21 @@ async def chat_command(msg: types.Message):
             vk_user = VkUser.objects.filter(owner=user).first()
             vksession = VkSession(access_token=vk_user.token, driver=await get_driver(vk_user.token))
             api = API(vksession)
-            markup = InlineKeyboardMarkup()
+            markup_builder = InlineKeyboardBuilder()
             for forward in forwards:
                 chat = await get_dialog_info(api, forward.vkchat.cid)
-                markup.row(*[InlineKeyboardButton(chat['title'], callback_data=f'ping{forward.tgchat.cid}'),
-                             InlineKeyboardButton('❌', callback_data=f'deleteforward{forward.pk}')])
+                markup_builder.row(*[InlineKeyboardButton(text=chat['title'], callback_data=f'ping{forward.tgchat.cid}'),
+                                   InlineKeyboardButton(text='❌', callback_data=f'deleteforward{forward.pk}')])
             msg_with_markup = await bot.send_message(msg.chat.id,
                                                      'Список привязанных диалогов\nНажав на имя диалога, бот пинганёт Вас в соответствующем чате Telegram.\nНажав на "❌", привязка чата будет удалена и все сообщение из диалога ВКонтакте будут попадать напрямую к боту',
-                                                     reply_markup=markup)
-            for row in markup.inline_keyboard:
+                                                     reply_markup=markup_builder.as_markup())
+            for row in markup_builder.as_markup().inline_keyboard:
                 for button in range(len(row)):
                     row[button] = row[button].to_python()
             MessageMarkup.objects.create(
                 message_id=msg_with_markup.message_id,
                 chat_id=msg_with_markup.chat.id,
-                buttons=json.dumps(markup.inline_keyboard)
+                buttons=json.dumps(markup_builder.as_markup().inline_keyboard)
             )
         else:
             await bot.send_message(msg.chat.id,
@@ -723,7 +722,7 @@ async def handle_text(msg: types.Message):
                 if str(msg.from_user.id) not in ALLOWED_USER_IDS.replace(' ', '').split(','):
                     await msg.reply('⛔️ Бот недоступен для Вашего аккаунта.\nУзнать Telegram ID - /id')
                     return
-            await bot.send_chat_action(msg.from_user.id, ChatActions.TYPING)
+            await bot.send_chat_action(msg.from_user.id, ChatAction.TYPING)
             token = m.group(2)
             if not VkUser.objects.filter(token=token).exists():
                 try:
@@ -787,6 +786,7 @@ async def handle_photo(msg: types.Message):
         forward = Forward.objects.filter(tgchat=tgchat).first()
         forward_messages_exists, message = await is_forwarding(msg.caption)
         message_options = await generate_send_options(msg, forward, forward_messages_exists, message)
+        file_id = None
         if msg.content_type == 'photo':
             file_id = msg.photo[-1].file_id
         elif msg.content_type == 'sticker':
@@ -910,21 +910,21 @@ async def handle_join(msg: types.Message, edit=False, chat_id=None, message_id=N
     vk_user = VkUser.objects.filter(owner=user).first()
     pages = None
     reply_to_message_id = None
-    markup = None
+    markup_builder = InlineKeyboardBuilder()
     if vk_user:
         if forward:
             text = text or '<i>Этот чат уже привязан к диалогу ВКонтакте, Вы можете выбрать новый диалог</i>'
         else:
             text = text or '<i>Выберите диалог ВКонтакте к которому будет привязан этот чат</i>'
-        markup = InlineKeyboardMarkup()
+        markup_builder = InlineKeyboardBuilder()
         excluded_ids = []
         if exclude:
             excluded_ids = [forward.vkchat.cid for forward in Forward.objects.filter(owner=user)]
         pages = await get_dialogs(vk_user.token, excluded_ids)
         if pages:
             for buttons_row in pages[0]:
-                markup.row(*buttons_row)
-            await get_pages_switcher(markup, 0, pages)
+                markup_builder.row(*buttons_row)
+            await get_pages_switcher(markup_builder, 0, pages)
     else:
         me = await bot.me
         if msg.chat.type == 'private':
@@ -932,14 +932,14 @@ async def handle_join(msg: types.Message, edit=False, chat_id=None, message_id=N
             reply_to_message_id = msg.message_id
         else:
             text = '<i>Вход не выполнен! Сперва нужно выполнить вход в ВК через бота</i>'
-            markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton('ВХОД', url=f'https://t.me/{me.username}?start=login'),
-                       InlineKeyboardButton('✅ Я залогинился', callback_data=f'logged-{msg.from_user.id}'))
+            markup_builder = InlineKeyboardBuilder()
+            markup_builder.add(InlineKeyboardButton(text='ВХОД', url=f'https://t.me/{me.username}?start=login'),
+                               InlineKeyboardButton(text='✅ Я залогинился', callback_data=f'logged-{msg.from_user.id}'))
     if edit:
         msg_with_markup = await bot.edit_message_text(text=text, chat_id=chat_id, message_id=message_id,
-                                                      reply_markup=markup, parse_mode=ParseMode.HTML)
+                                                      reply_markup=markup_builder.as_markup(), parse_mode=ParseMode.HTML)
     else:
-        msg_with_markup = await bot.send_message(msg.chat.id, text=text, reply_markup=markup, parse_mode=ParseMode.HTML,
+        msg_with_markup = await bot.send_message(msg.chat.id, text=text, reply_markup=markup_builder.as_markup(), parse_mode=ParseMode.HTML,
                                                  reply_to_message_id=reply_to_message_id)
     if pages:
         for page in pages:
@@ -967,15 +967,19 @@ async def handle_chat_migration(msg: types.Message):
         forward.tgchat.cid = msg.migrate_to_chat_id
         forward.tgchat.save()
 
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton('Установить аватар и название', callback_data=f'setinfo{forward.vkchat.cid}'))
+        markup_builder = InlineKeyboardBuilder()
+        markup_builder.add(InlineKeyboardButton(text='Установить аватар и название', callback_data=f'setinfo{forward.vkchat.cid}'))
         await bot.send_message(msg.migrate_to_chat_id,
                                text='Отлично! Теперь можно установить аватар и название. Если кнопка выше не работает, то воспользуйтесь этой.',
-                               reply_markup=markup)
+                               reply_markup=markup_builder.as_markup())
+
+
+async def main():
+    await asyncio.gather(*[task['task'] for task in TASKS])
+
+    await dp.start_polling(bot)
 
 
 if __name__ == '__main__':
     TASKS = vk_polling_tasks()
-    asyncio.gather(*[task['task'] for task in TASKS])
-
-    executor.start_polling(dp)
+    asyncio.run(main())

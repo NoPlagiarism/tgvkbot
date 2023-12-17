@@ -1,19 +1,57 @@
+import io
+from enum import Enum
+from math import ceil
 import urllib.parse
 from concurrent.futures import CancelledError, TimeoutError
 
-from aiogram.utils.markdown import quote_html, hlink
+from aiogram.utils.markdown import hlink
 from aiovk.longpoll import LongPoll
 from aiovk import API
 import aiovk.exceptions as vk_exc
-from aiogram.types import ParseMode, MediaGroup, ChatActions
-import aiogram.utils.exceptions as tg_exc
-from aiogram.utils.parts import safe_split_text, MAX_MESSAGE_LENGTH
+from aiogram.enums import ParseMode, ChatAction
+from aiogram.utils.media_group import MediaGroupBuilder
+import aiogram.exceptions as tg_exc
 from PIL import Image
+from html import escape as quote_html
 
 from bot import *
 
+import typing as t
+
 log = logging.getLogger('vk_messages')
 inline_link_re = re.compile('\[([a-zA-Z0-9_]*)\|(.*?)\]', re.MULTILINE)
+
+# aiogram (2) utils.parts
+
+
+MAX_MESSAGE_LENGTH = 4096
+
+
+def safe_split_text(text: str, length: int = MAX_MESSAGE_LENGTH) -> t.List[str]:
+    """
+    Split long text
+
+    :param text:
+    :param length:
+    :return:
+    """
+    temp_text = text
+    parts = []
+    while temp_text:
+        if len(temp_text) > length:
+            try:
+                split_pos = temp_text[:length].rindex(' ')
+            except ValueError:
+                split_pos = length
+            if split_pos < length // 4 * 3:
+                split_pos = length
+            parts.append(temp_text[:split_pos])
+            temp_text = temp_text[split_pos:].lstrip()
+        else:
+            parts.append(temp_text)
+            break
+    return parts
+
 
 
 ################### Честно взято по лицензии https://github.com/vk-brain/sketal/blob/master/LICENSE ###################
@@ -29,15 +67,6 @@ def parse_msg_flags(bitmask, keys=('unread', 'outbox', 'replied', 'important', '
         start *= 2
         values.append(bool(result))
     return dict(zip(keys, values))
-
-
-from enum import Enum
-
-
-class Wait(Enum):
-    NO = 0
-    YES = 1
-    CUSTOM = 2
 
 
 class EventType(Enum):
@@ -250,8 +279,6 @@ class Attachment(object):
 
 
 MAX_LENGHT = 4000
-
-from math import ceil
 
 
 class LPMessage(object):
@@ -505,8 +532,7 @@ async def process_longpoll_event(api, new_event):
 
     if flags['outbox']:
         return
-
-        data.is_out = True
+        # data.is_out = True
 
     data.full_text = new_event[5].replace('<br>', '\n')
 
@@ -595,11 +621,10 @@ async def process_message(msg, token=None, is_multichat=None, vk_chat_id=None, u
                 else:
                     attaches_scheme.append({'content': [location[0], location[1]], 'type': 'location'})
             name = first_name + ((' ' + last_name) if last_name else '')
+            header = ""
             if forward_setting:
                 if forwarded or is_multichat:
                     header = f'<b>{name}</b>' + '\n'
-                elif not forwarded:
-                    header = ''
                 to_tg_chat = forward_setting.tgchat.cid
             else:
                 if forwarded or not is_multichat:
@@ -659,19 +684,14 @@ async def process_message(msg, token=None, is_multichat=None, vk_chat_id=None, u
                             body_parts[body_part] = body_parts[body_part].replace(i.group(0),
                                                                                   hlink(f'{i.group(2)}', url=vk_url))
                     try:
-                        await bot.send_chat_action(to_tg_chat, ChatActions.TYPING)
+                        await bot.send_chat_action(to_tg_chat, ChatAction.TYPING)
                     except:
                         return
-                    try:  # Чтобы не падало при реплае на сообщение из чата внутри ТГ
-                        tg_message = await bot.send_message(vkuser.owner.uid, body_parts[body_part],
-                                                            parse_mode=ParseMode.HTML,
-                                                            reply_to_message_id=main_message,
-                                                            disable_notification=disable_notify)
-                    except tg_exc.MessageError:  # Надо бы обновить aiogram, чтобы можно было ловить MessageToReplyNotFound
-                        tg_message = await bot.send_message(vkuser.owner.uid, body_parts[body_part],
-                                                            parse_mode=ParseMode.HTML,
-                                                            reply_to_message_id=None,
-                                                            disable_notification=disable_notify)
+                    tg_message = await bot.send_message(vkuser.owner.uid, body_parts[body_part],
+                                                        parse_mode=ParseMode.HTML,
+                                                        reply_to_message_id=main_message,
+                                                        allow_sending_without_reply=True,  # Чтобы не падало при реплае на сообщение из чата внутри ТГ
+                                                        disable_notification=disable_notify)
                     if body_part == 0:
                         header_message = tg_message
                         if forwarded:
@@ -690,19 +710,14 @@ async def process_message(msg, token=None, is_multichat=None, vk_chat_id=None, u
                     if check_url:
                         body = body.replace(i.group(0), hlink(f'{i.group(2)}', url=vk_url))
                 try:
-                    await bot.send_chat_action(to_tg_chat, ChatActions.TYPING)
+                    await bot.send_chat_action(to_tg_chat, ChatAction.TYPING)
                 except:
                     return
-                try:  # Чтобы не падало при реплае на сообщение из чата внутри ТГ
-                    header_message = tg_message = await bot.send_message(to_tg_chat, header + body,
-                                                                         parse_mode=ParseMode.HTML,
-                                                                         reply_to_message_id=main_message,
-                                                                         disable_notification=disable_notify)
-                except tg_exc.MessageError:  # Надо бы обновить aiogram, чтобы можно было ловить MessageToReplyNotFound
-                    header_message = tg_message = await bot.send_message(to_tg_chat, header + body,
-                                                                         parse_mode=ParseMode.HTML,
-                                                                         reply_to_message_id=None,
-                                                                         disable_notification=disable_notify)
+                header_message = tg_message = await bot.send_message(to_tg_chat, header + body,
+                                                                     parse_mode=ParseMode.HTML,
+                                                                     reply_to_message_id=main_message,
+                                                                     allow_sending_without_reply=True,
+                                                                     disable_notification=disable_notify)
                 if forwarded:
                     main_message = header_message.message_id
                 Message.objects.create(
@@ -715,9 +730,9 @@ async def process_message(msg, token=None, is_multichat=None, vk_chat_id=None, u
             photo_attachments = [attach for attach in attaches_scheme if attach and attach['type'] == 'photo']
 
             if len(photo_attachments) > 1:
-                media = MediaGroup()
+                media = MediaGroupBuilder()
                 for photo in photo_attachments:
-                    media.attach_photo(photo['content'])
+                    media.add_photo(photo['content'])
                 tg_messages = await tgsend(bot.send_media_group, to_tg_chat, media, reply_to_message_id=main_message,
                                            disable_notification=disable_notify, vk_msg_url=vk_msg_url)
                 for tg_message in tg_messages:
@@ -732,17 +747,17 @@ async def process_message(msg, token=None, is_multichat=None, vk_chat_id=None, u
                 if attachment:
                     tg_message = None
                     if attachment['type'] == 'text':
-                        await bot.send_chat_action(to_tg_chat, ChatActions.TYPING)
+                        await bot.send_chat_action(to_tg_chat, ChatAction.TYPING)
                         tg_message = await tgsend(bot.send_message, to_tg_chat, attachment['content'],
                                                   parse_mode=ParseMode.HTML, reply_to_message_id=main_message,
                                                   disable_notification=disable_notify, vk_msg_url=vk_msg_url)
                     elif attachment['type'] == 'photo' and len(photo_attachments) == 1:
-                        await bot.send_chat_action(to_tg_chat, ChatActions.UPLOAD_PHOTO)
+                        await bot.send_chat_action(to_tg_chat, ChatAction.UPLOAD_PHOTO)
                         tg_message = await tgsend(bot.send_photo, to_tg_chat, attachment['content'],
                                                   reply_to_message_id=main_message,
                                                   disable_notification=disable_notify, vk_msg_url=vk_msg_url)
                     elif attachment['type'] == 'document':
-                        await bot.send_chat_action(to_tg_chat, ChatActions.UPLOAD_DOCUMENT)
+                        await bot.send_chat_action(to_tg_chat, ChatAction.UPLOAD_DOCUMENT)
                         tg_message = await tgsend(bot.send_document, to_tg_chat,
                                                   attachment.get('content', '') or attachment.get('url'),
                                                   reply_to_message_id=main_message, disable_notification=disable_notify,
@@ -760,27 +775,27 @@ async def process_message(msg, token=None, is_multichat=None, vk_chat_id=None, u
                             except:
                                 pass
                     elif attachment['type'] == 'video':
-                        await bot.send_chat_action(to_tg_chat, ChatActions.UPLOAD_VIDEO)
+                        await bot.send_chat_action(to_tg_chat, ChatAction.UPLOAD_VIDEO)
                         tg_message = await tgsend(bot.send_video, to_tg_chat, attachment['content'],
                                                   reply_to_message_id=main_message, disable_notification=disable_notify,
                                                   vk_msg_url=vk_msg_url)
                     elif attachment['type'] == 'sticker':
-                        await bot.send_chat_action(to_tg_chat, ChatActions.TYPING)
+                        await bot.send_chat_action(to_tg_chat, ChatAction.TYPING)
                         tg_message = await tgsend(bot.send_sticker, to_tg_chat, attachment['content'],
                                                   reply_to_message_id=main_message, disable_notification=disable_notify,
                                                   vk_msg_url=vk_msg_url)
                     elif attachment['type'] == 'location':
-                        await bot.send_chat_action(to_tg_chat, ChatActions.FIND_LOCATION)
+                        await bot.send_chat_action(to_tg_chat, ChatAction.FIND_LOCATION)
                         tg_message = await tgsend(bot.send_location, to_tg_chat, *attachment['content'],
                                                   reply_to_message_id=main_message, disable_notification=disable_notify,
                                                   vk_msg_url=vk_msg_url)
                     elif attachment['type'] == 'venue':
-                        await bot.send_chat_action(to_tg_chat, ChatActions.FIND_LOCATION)
+                        await bot.send_chat_action(to_tg_chat, ChatAction.FIND_LOCATION)
                         tg_message = await tgsend(bot.send_venue, to_tg_chat, *attachment['content'],
                                                   reply_to_message_id=main_message, disable_notification=disable_notify,
                                                   vk_msg_url=vk_msg_url)
                     elif attachment['type'] == 'audio':
-                        await bot.send_chat_action(to_tg_chat, ChatActions.UPLOAD_DOCUMENT)
+                        await bot.send_chat_action(to_tg_chat, ChatAction.UPLOAD_DOCUMENT)
                         tg_message = await tgsend(bot.send_audio, to_tg_chat, audio=attachment['content'],
                                                   caption=attachment.get('caption', None),
                                                   performer=attachment.get('artist', None),
@@ -789,7 +804,7 @@ async def process_message(msg, token=None, is_multichat=None, vk_chat_id=None, u
                                                   vk_msg_url=vk_msg_url,
                                                   parse_mode='HTML')
                     elif attachment['type'] == 'audio_message':
-                        await bot.send_chat_action(to_tg_chat, ChatActions.RECORD_AUDIO)
+                        await bot.send_chat_action(to_tg_chat, ChatAction.RECORD_VOICE)
                         tg_message = await tgsend(bot.send_voice, to_tg_chat, voice=attachment['content'])
 
                         # Надо бы делать по-умнее, но очень лень.
@@ -812,7 +827,7 @@ async def process_message(msg, token=None, is_multichat=None, vk_chat_id=None, u
                             tg_id=tg_message.message_id
                         )
             if vk_msg.get('fwd_messages'):
-                await bot.send_chat_action(to_tg_chat, ChatActions.TYPING)
+                await bot.send_chat_action(to_tg_chat, ChatAction.TYPING)
                 for fwd_message in vk_msg['fwd_messages']:
                     # Не у всех сообщений есть уникальный id, похоже надо сохранять conversation_message_id в том числе
                     # И делать миграции
@@ -865,8 +880,8 @@ async def tgsend(method, *args, **kwargs):
     try:
         tg_message = await method(*args, **kwargs)
         return tg_message
-    except tg_exc.RetryAfter as e:
-        await asyncio.sleep(e.timeout)
+    except tg_exc.TelegramRetryAfter as e:
+        await asyncio.sleep(e.retry_after)
         await tgsend(method, *args, **kwargs)
     except Exception:
         log.exception(msg='Error in message sending', exc_info=True)
@@ -880,8 +895,8 @@ async def tgsend_error_report(chat_id, vk_msg_url):
         if vk_msg_url:
             text += '\n' + f'<a href="{vk_msg_url}">Сообщение</a>'
         await bot.send_message(chat_id, text=text, parse_mode='HTML')
-    except tg_exc.RetryAfter as e:
-        await asyncio.sleep(e.timeout)
+    except tg_exc.TelegramRetryAfter as e:
+        await asyncio.sleep(e.retry_after)
         await tgsend_error_report(chat_id, vk_msg_url)
     except Exception:
         log.exception(msg='Error in message sending report', exc_info=True)
@@ -894,7 +909,7 @@ async def process_event(msg):
 
 async def check_vk_url(url):
     try:
-        with aiohttp.ClientSession(conn_timeout=5) as session:
+        async with aiohttp.ClientSession(conn_timeout=5) as session:
             r = await session.request('GET', url)
             if r.status == 200:
                 return True
@@ -937,7 +952,7 @@ async def process_attachment(attachment, token=None, vk_msg_url=None):
     elif atype == 'audio':
         if attachment[atype].get('url') and AUDIO_PROXY_URL:
             try:
-                with aiohttp.ClientSession() as session:
+                async with aiohttp.ClientSession() as session:
                     r = await session.request('GET', AUDIO_PROXY_URL,
                                               params={'url': urllib.parse.quote(attachment[atype]['url']),
                                                       'artist': urllib.parse.quote(attachment[atype].get('artist', '')),
@@ -953,7 +968,7 @@ async def process_attachment(attachment, token=None, vk_msg_url=None):
         if AUDIO_ACCESS_URL:
             if token:
                 try:
-                    with aiohttp.ClientSession() as session:
+                    async with aiohttp.ClientSession() as session:
                         r = await session.request('GET', AUDIO_ACCESS_URL.format(token=token,
                                                                                  owner_id=attachment[atype]['owner_id'],
                                                                                  audio_id=attachment[atype]['id'],
@@ -968,7 +983,7 @@ async def process_attachment(attachment, token=None, vk_msg_url=None):
                     pass
         if AUDIO_URL:
             try:
-                with aiohttp.ClientSession() as session:
+                async with aiohttp.ClientSession() as session:
                     r = await session.request('GET', AUDIO_URL.format(owner_id=attachment[atype]['owner_id'],
                                                                       audio_id=attachment[atype]['id']))
                     if r.status != 200:
@@ -983,7 +998,7 @@ async def process_attachment(attachment, token=None, vk_msg_url=None):
                 search = form_audio_title(attachment[atype])
                 if not search:
                     raise Exception
-                with aiohttp.ClientSession() as session:
+                async with aiohttp.ClientSession() as session:
                     r = await session.request('GET', AUDIO_SEARCH_URL, params={'q': urllib.parse.quote(search)})
                     if r.status != 200:
                         raise Exception
@@ -996,7 +1011,7 @@ async def process_attachment(attachment, token=None, vk_msg_url=None):
                             audio = audios['data'][0]
                     else:
                         raise Exception
-                    with aiohttp.ClientSession() as session:
+                    async with aiohttp.ClientSession() as session:
                         r = await session.request('GET', audio["download"])
                         if r.status != 200:
                             raise Exception
@@ -1058,7 +1073,7 @@ async def process_attachment(attachment, token=None, vk_msg_url=None):
 
     elif atype == 'graffiti':
         graffiti_url = attachment[atype]['url']
-        with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession() as session:
             img = await (await session.request('GET', graffiti_url)).read()
         imgdata = Image.open(io.BytesIO(img))
         webp = io.BytesIO()
@@ -1068,7 +1083,7 @@ async def process_attachment(attachment, token=None, vk_msg_url=None):
 
     elif atype == 'sticker':
         sticker_url = attachment[atype]['images'][-1]['url']
-        with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession() as session:
             img = await (await session.request('GET', sticker_url)).read()
         imgdata = Image.open(io.BytesIO(img))
         webp = io.BytesIO()
